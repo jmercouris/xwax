@@ -98,6 +98,53 @@ static void format_record_label(const struct record *r, char *buf, size_t len)
     }
 }
 
+static void format_duration(double seconds, char *buf, size_t len)
+{
+    unsigned int s;
+
+    assert(buf != NULL);
+    assert(len != 0);
+
+    if (seconds < 0.0)
+        seconds = 0.0;
+
+    s = seconds;
+
+    if (s >= 60 * 60) {
+        unsigned int h, m;
+
+        h = s / (60 * 60);
+        s %= 60 * 60;
+        m = s / 60;
+        s %= 60;
+
+        snprintf(buf, len, "%u:%02u:%02u", h, m, s);
+    } else {
+        snprintf(buf, len, "%u:%02u", s / 60, s % 60);
+    }
+}
+
+static void format_track_time(struct deck *d, char *buf, size_t len)
+{
+    double elapsed, total;
+    char elapsed_buf[32], total_buf[32];
+
+    assert(buf != NULL);
+    assert(len != 0);
+
+    if (d->record == NULL || d->record->pathname == NULL) {
+        snprintf(buf, len, "--:-- / --:--");
+        return;
+    }
+
+    elapsed = player_get_elapsed(&d->player);
+    total = (double)d->player.track->length / d->player.track->rate;
+
+    format_duration(elapsed, elapsed_buf, sizeof elapsed_buf);
+    format_duration(total, total_buf, sizeof total_buf);
+    snprintf(buf, len, "%s / %s", elapsed_buf, total_buf);
+}
+
 static void draw_screen(void)
 {
     int rows, cols;
@@ -105,8 +152,8 @@ static void draw_screen(void)
     struct record *r;
     const char *message;
     const char *title, *artist;
-    char label[512];
-    int i, list_start, list_height;
+    char label[512], timebuf[80];
+    int i, list_start, list_height, tx, title_width, artist_width;
 
     getmaxyx(stdscr, rows, cols);
     erase();
@@ -117,6 +164,19 @@ static void draw_screen(void)
 
     title = record_title(d->record);
     artist = record_artist(d->record);
+    format_track_time(d, timebuf, sizeof timebuf);
+
+    tx = cols - (int)strlen(timebuf);
+    if (tx < 9)
+        tx = 9;
+
+    title_width = tx - 10;
+    if (title_width < 0)
+        title_width = 0;
+
+    artist_width = cols - 10;
+    if (artist_width < 0)
+        artist_width = 0;
 
     attron(A_BOLD);
     mvprintw(0, 0, " Track:");
@@ -124,12 +184,18 @@ static void draw_screen(void)
     attroff(A_BOLD);
 
     if (d->record && d->record->pathname != NULL) {
-        mvprintw(0, 8, " %s", title);
-        mvprintw(1, 8, " %s", artist);
+        mvaddnstr(0, 8, " ", 1);
+        mvaddnstr(0, 9, title, title_width);
+        mvprintw(0, tx, "%s", timebuf);
+        mvaddnstr(1, 8, " ", 1);
+        mvaddnstr(1, 9, artist, artist_width);
     } else {
         attron(A_DIM);
-        mvprintw(0, 8, " %s", title);
-        mvprintw(1, 8, " %s", artist);
+        mvaddnstr(0, 8, " ", 1);
+        mvaddnstr(0, 9, title, title_width);
+        mvprintw(0, tx, "%s", timebuf);
+        mvaddnstr(1, 8, " ", 1);
+        mvaddnstr(1, 9, artist, artist_width);
         attroff(A_DIM);
     }
 
@@ -137,13 +203,7 @@ static void draw_screen(void)
 
     /* Track list */
 
-    attron(A_BOLD);
-    mvprintw(3, 0, " Library");
-    attroff(A_BOLD);
-
-    mvhline(4, 0, ACS_HLINE, cols);
-
-    list_start = 5;
+    list_start = 3;
     list_height = rows - list_start - 1;
     if (list_height < 1)
         list_height = 1;
