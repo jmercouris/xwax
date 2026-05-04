@@ -26,13 +26,18 @@
  */
 
 #include <assert.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <pthread.h>
 #include <stdbool.h>
+#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 #include <ncurses.h>
 
 #include "deck.h"
+#include "external.h"
 #include "interface.h"
 #include "library.h"
 #include "listbox.h"
@@ -46,6 +51,8 @@
 static struct selector selector;
 static pthread_t ph;
 static volatile bool running;
+static int stderr_fd = -1, stderr_save = -1;
+static struct rb stderr_rb;
 
 static const char *pathname_basename(const char *pathname)
 {
@@ -145,15 +152,194 @@ static void format_track_time(struct deck *d, char *buf, size_t len)
     snprintf(buf, len, "%s / %s", elapsed_buf, total_buf);
 }
 
+static int make_nonblocking(int fd)
+{
+    int flags;
+
+    flags = fcntl(fd, F_GETFL);
+    if (flags == -1) {
+        perror("fcntl");
+        return -1;
+    }
+
+    if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) == -1) {
+        perror("fcntl");
+        return -1;
+    }
+
+    return 0;
+}
+
+static int begin_stderr_capture(void)
+{
+    int pp[2];
+
+    if (pipe(pp) == -1) {
+        perror("pipe");
+        return -1;
+    }
+
+    if (make_nonblocking(pp[0]) == -1)
+        goto fail;
+
+    stderr_save = dup(STDERR_FILENO);
+    if (stderr_save == -1) {
+        perror("dup");
+        goto fail;
+    }
+
+    if (dup2(pp[1], STDERR_FILENO) == -1) {
+        perror("dup2");
+        goto fail_save;
+    }
+
+    if (close(pp[1]) == -1)
+        abort();
+
+    stderr_fd = pp[0];
+    rb_reset(&stderr_rb);
+    return 0;
+
+fail_save:
+    if (close(stderr_save) == -1)
+        abort();
+    stderr_save = -1;
+fail:
+    if (close(pp[0]) == -1)
+        abort();
+    if (close(pp[1]) == -1)
+        abort();
+    return -1;
+}
+
+static void emit_stderr_message(const char *line, size_t len)
+{
+    char *msg;
+
+    msg = strndup(line, len);
+    if (msg == NULL) {
+        status_set(STATUS_ALERT, "Out of memory reading stderr");
+        return;
+    }
+
+    if (msg[0] != '\0')
+        status_printf(STATUS_ALERT, "%s", msg);
+
+    free(msg);
+}
+
+static void flush_stderr_buffer(void)
+{
+    if (stderr_rb.len == 0)
+        return;
+
+    emit_stderr_message(stderr_rb.buf, stderr_rb.len);
+    rb_reset(&stderr_rb);
+}
+
+static void split_stderr_buffer(void)
+{
+    for (;;) {
+        char *eol;
+        size_t len;
+
+        eol = memchr(stderr_rb.buf, '\n', stderr_rb.len);
+        if (eol == NULL)
+            return;
+
+        len = eol - stderr_rb.buf;
+        emit_stderr_message(stderr_rb.buf, len);
+        memmove(stderr_rb.buf, eol + 1, stderr_rb.len - len - 1);
+        stderr_rb.len -= len + 1;
+    }
+}
+
+static void pump_stderr(void)
+{
+    if (stderr_fd == -1)
+        return;
+
+    for (;;) {
+        char buf[512];
+        ssize_t z;
+
+        z = read(stderr_fd, buf, sizeof buf);
+        if (z > 0) {
+            size_t off;
+
+            off = 0;
+            while (off < (size_t)z) {
+                size_t chunk;
+                size_t remain;
+
+                remain = sizeof(stderr_rb.buf) - stderr_rb.len;
+                if (remain == 0) {
+                    status_set(STATUS_ALERT, "Error output truncated");
+                    rb_reset(&stderr_rb);
+                    remain = sizeof(stderr_rb.buf);
+                }
+
+                chunk = z - off;
+                if (chunk > remain)
+                    chunk = remain;
+
+                memcpy(stderr_rb.buf + stderr_rb.len, buf + off, chunk);
+                stderr_rb.len += chunk;
+                off += chunk;
+                split_stderr_buffer();
+            }
+            continue;
+        }
+
+        if (z == 0) {
+            flush_stderr_buffer();
+            return;
+        }
+
+        if (errno == EAGAIN || errno == EWOULDBLOCK)
+            return;
+
+        status_printf(STATUS_ALERT, "Error reading stderr: %s",
+                      strerror(errno));
+        return;
+    }
+}
+
+static void end_stderr_capture(void)
+{
+    if (stderr_save == -1)
+        return;
+
+    pump_stderr();
+
+    if (dup2(stderr_save, STDERR_FILENO) == -1)
+        abort();
+    if (close(stderr_save) == -1)
+        abort();
+    stderr_save = -1;
+
+    pump_stderr();
+    flush_stderr_buffer();
+
+    if (close(stderr_fd) == -1)
+        abort();
+    stderr_fd = -1;
+}
+
 static void draw_screen(void)
 {
+    enum {
+        HEADER_VALUE_COL = 9,
+        RIGHT_MARGIN = 1
+    };
+
     int rows, cols;
     struct deck *d;
     struct record *r;
     const char *message;
     const char *title, *artist;
     char label[512], timebuf[80];
-    int i, list_start, list_height, tx, title_width, artist_width;
+    int i, list_start, list_height, tx, title_width, artist_width, time_width;
 
     getmaxyx(stdscr, rows, cols);
     erase();
@@ -166,17 +352,24 @@ static void draw_screen(void)
     artist = record_artist(d->record);
     format_track_time(d, timebuf, sizeof timebuf);
 
-    tx = cols - (int)strlen(timebuf);
-    if (tx < 9)
-        tx = 9;
+    tx = cols - (int)strlen(timebuf) - RIGHT_MARGIN;
+    if (tx < HEADER_VALUE_COL)
+        tx = HEADER_VALUE_COL;
 
-    title_width = tx - 10;
+    title_width = tx - HEADER_VALUE_COL - 1;
     if (title_width < 0)
         title_width = 0;
 
-    artist_width = cols - 10;
+    artist_width = cols - HEADER_VALUE_COL - RIGHT_MARGIN;
     if (artist_width < 0)
         artist_width = 0;
+
+    time_width = cols - tx - RIGHT_MARGIN;
+    if (time_width < 0)
+        time_width = 0;
+
+    mvhline(0, 0, ' ', cols);
+    mvhline(1, 0, ' ', cols);
 
     attron(A_BOLD);
     mvprintw(0, 0, " Track:");
@@ -184,18 +377,14 @@ static void draw_screen(void)
     attroff(A_BOLD);
 
     if (d->record && d->record->pathname != NULL) {
-        mvaddnstr(0, 8, " ", 1);
-        mvaddnstr(0, 9, title, title_width);
-        mvprintw(0, tx, "%s", timebuf);
-        mvaddnstr(1, 8, " ", 1);
-        mvaddnstr(1, 9, artist, artist_width);
+        mvaddnstr(0, HEADER_VALUE_COL, title, title_width);
+        mvaddnstr(0, tx, timebuf, time_width);
+        mvaddnstr(1, HEADER_VALUE_COL, artist, artist_width);
     } else {
         attron(A_DIM);
-        mvaddnstr(0, 8, " ", 1);
-        mvaddnstr(0, 9, title, title_width);
-        mvprintw(0, tx, "%s", timebuf);
-        mvaddnstr(1, 8, " ", 1);
-        mvaddnstr(1, 9, artist, artist_width);
+        mvaddnstr(0, HEADER_VALUE_COL, title, title_width);
+        mvaddnstr(0, tx, timebuf, time_width);
+        mvaddnstr(1, HEADER_VALUE_COL, artist, artist_width);
         attroff(A_DIM);
     }
 
@@ -293,8 +482,10 @@ static void *launch(void *arg)
     while (running) {
         int ch;
 
+        pump_stderr();
         draw_screen();
         ch = getch();
+        pump_stderr();
         if (ch != ERR)
             handle_key(ch);
     }
@@ -318,6 +509,11 @@ int interface_start(struct library *lib, const char *geo, bool decor)
     timeout(REFRESH_MS);
     curs_set(0);
 
+    if (begin_stderr_capture() == -1) {
+        endwin();
+        return -1;
+    }
+
     status_set_output(false);
     selector_init(&selector, lib);
 
@@ -326,8 +522,9 @@ int interface_start(struct library *lib, const char *geo, bool decor)
     if (pthread_create(&ph, NULL, launch, NULL)) {
         perror("pthread_create");
         selector_clear(&selector);
-        status_set_output(true);
         endwin();
+        end_stderr_capture();
+        status_set_output(true);
         return -1;
     }
 
@@ -347,5 +544,6 @@ void interface_stop(void)
 
     selector_clear(&selector);
     endwin();
+    end_stderr_capture();
     status_set_output(true);
 }
