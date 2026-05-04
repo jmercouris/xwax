@@ -217,7 +217,7 @@ static int track_init(struct track *t, const char *importer, const char *path)
 {
     pid_t pid;
 
-    fprintf(stderr, "Importing '%s'...\n", path);
+    status_printf(STATUS_INFO, "Importing '%s'...", path);
 
     pid = fork_pipe_nb(&t->fd, importer, "import", path, STR(RATE), NULL);
     if (pid == -1)
@@ -446,9 +446,10 @@ static void stop_import(struct track *t)
         abort();
 
     if (WIFEXITED(status) && WEXITSTATUS(status) == EXIT_SUCCESS) {
-        fprintf(stderr, "Track import completed\n");
+        status_set(STATUS_INFO, "Track import completed");
     } else {
-        fprintf(stderr, "Track import completed with status %d\n", status);
+        status_printf(STATUS_WARN,
+                      "Track import completed with status %d", status);
         if (!t->terminated)
             status_printf(STATUS_ALERT, "Error importing %s", t->path);
     }

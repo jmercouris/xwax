@@ -38,6 +38,7 @@
 #include "listbox.h"
 #include "rig.h"
 #include "selector.h"
+#include "status.h"
 #include "xwax.h"
 
 #define REFRESH_MS 100
@@ -46,11 +47,65 @@ static struct selector selector;
 static pthread_t ph;
 static volatile bool running;
 
+static const char *pathname_basename(const char *pathname)
+{
+    const char *base;
+
+    base = strrchr(pathname, '/');
+    if (base == NULL)
+        return pathname;
+
+    return base + 1;
+}
+
+static const char *record_title(const struct record *r)
+{
+    if (r == NULL || r->pathname == NULL)
+        return "(no track loaded)";
+
+    if (r->title[0] != '\0')
+        return r->title;
+
+    return pathname_basename(r->pathname);
+}
+
+static const char *record_artist(const struct record *r)
+{
+    if (r == NULL || r->pathname == NULL)
+        return "";
+
+    if (r->artist[0] != '\0')
+        return r->artist;
+
+    return "(unknown artist)";
+}
+
+static void format_record_label(const struct record *r, char *buf, size_t len)
+{
+    assert(buf != NULL);
+    assert(len != 0);
+
+    if (r == NULL || r->pathname == NULL) {
+        snprintf(buf, len, "(no track loaded)");
+    } else if (r->artist[0] != '\0' && r->title[0] != '\0') {
+        snprintf(buf, len, "%s - %s", r->artist, r->title);
+    } else if (r->title[0] != '\0') {
+        snprintf(buf, len, "%s", r->title);
+    } else if (r->artist[0] != '\0') {
+        snprintf(buf, len, "%s", r->artist);
+    } else {
+        snprintf(buf, len, "%s", pathname_basename(r->pathname));
+    }
+}
+
 static void draw_screen(void)
 {
     int rows, cols;
     struct deck *d;
     struct record *r;
+    const char *message;
+    const char *title, *artist;
+    char label[512];
     int i, list_start, list_height;
 
     getmaxyx(stdscr, rows, cols);
@@ -60,27 +115,35 @@ static void draw_screen(void)
 
     /* Header: loaded track */
 
+    title = record_title(d->record);
+    artist = record_artist(d->record);
+
     attron(A_BOLD);
-    mvprintw(0, 0, " Loaded:");
+    mvprintw(0, 0, " Track:");
+    mvprintw(1, 0, "Artist:");
     attroff(A_BOLD);
 
-    if (d->record && d->record->artist[0] != '\0') {
-        mvprintw(0, 9, " %s - %s", d->record->artist, d->record->title);
+    if (d->record && d->record->pathname != NULL) {
+        mvprintw(0, 8, " %s", title);
+        mvprintw(1, 8, " %s", artist);
     } else {
         attron(A_DIM);
-        mvprintw(0, 9, " (no track loaded)");
+        mvprintw(0, 8, " %s", title);
+        mvprintw(1, 8, " %s", artist);
         attroff(A_DIM);
     }
 
-    mvhline(1, 0, ACS_HLINE, cols);
+    mvhline(2, 0, ACS_HLINE, cols);
 
     /* Track list */
 
     attron(A_BOLD);
-    mvprintw(2, 0, " Library");
+    mvprintw(3, 0, " Library");
     attroff(A_BOLD);
 
-    list_start = 3;
+    mvhline(4, 0, ACS_HLINE, cols);
+
+    list_start = 5;
     list_height = rows - list_start - 1;
     if (list_height < 1)
         list_height = 1;
@@ -93,23 +156,38 @@ static void draw_screen(void)
             break;
 
         r = selector.view_index->record[entry];
+        format_record_label(r, label, sizeof label);
 
         if (entry == listbox_current(&selector.records)) {
             attron(A_REVERSE);
             mvhline(list_start + i, 0, ' ', cols);
-            mvprintw(list_start + i, 0, " > %s - %s", r->artist, r->title);
+            mvprintw(list_start + i, 0, " > %s", label);
             attroff(A_REVERSE);
         } else {
-            mvprintw(list_start + i, 0, "   %s - %s", r->artist, r->title);
+            mvprintw(list_start + i, 0, "   %s", label);
         }
     }
 
     /* Key hints at bottom */
 
-    attron(A_DIM);
     mvhline(rows - 1, 0, ' ', cols);
-    mvprintw(rows - 1, 0, " q:quit  Up/Down:navigate  Right/Enter:load track");
-    attroff(A_DIM);
+
+    message = status();
+    if (message[0] != '\0') {
+        int attr = A_DIM;
+
+        if (status_level() >= STATUS_WARN)
+            attr = A_BOLD;
+
+        attron(attr);
+        mvprintw(rows - 1, 0, " %s", message);
+        attroff(attr);
+    } else {
+        attron(A_DIM);
+        mvprintw(rows - 1, 0,
+                 " q:quit  Up/Down:navigate  Right/Enter:load track");
+        attroff(A_DIM);
+    }
 
     refresh();
 }
@@ -180,6 +258,7 @@ int interface_start(struct library *lib, const char *geo, bool decor)
     timeout(REFRESH_MS);
     curs_set(0);
 
+    status_set_output(false);
     selector_init(&selector, lib);
 
     running = true;
@@ -187,6 +266,7 @@ int interface_start(struct library *lib, const char *geo, bool decor)
     if (pthread_create(&ph, NULL, launch, NULL)) {
         perror("pthread_create");
         selector_clear(&selector);
+        status_set_output(true);
         endwin();
         return -1;
     }
@@ -207,4 +287,5 @@ void interface_stop(void)
 
     selector_clear(&selector);
     endwin();
+    status_set_output(true);
 }

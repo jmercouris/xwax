@@ -42,7 +42,7 @@ static int excrate_init(struct excrate *e, const char *script,
 {
     pid_t pid;
 
-    fprintf(stderr, "External scan '%s'...\n", search);
+    status_printf(STATUS_INFO, "External scan '%s'...", search);
 
     pid = fork_pipe_nb(&e->fd, script, "scan", search, NULL);
     if (pid == -1)
@@ -169,9 +169,9 @@ static void do_wait(struct excrate *e)
     debug("wait for pid %d returned %d", e->pid, status);
 
     if (WIFEXITED(status) && WEXITSTATUS(status) == EXIT_SUCCESS) {
-        fprintf(stderr, "Scan completed\n");
+        status_set(STATUS_INFO, "Scan completed");
     } else {
-        fprintf(stderr, "Scan completed with status %d\n", status);
+        status_printf(STATUS_WARN, "Scan completed with status %d", status);
         if (!e->terminated)
             status_printf(STATUS_ALERT, "Error scanning %s", e->search);
     }
