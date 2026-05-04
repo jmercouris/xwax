@@ -24,8 +24,7 @@
 
 INSTALL ?= install
 
-SDL_CFLAGS ?= `sdl2-config --cflags`
-SDL_LIBS ?= `sdl2-config --libs` -lSDL2_ttf
+NCURSES_LIBS ?= -lncurses
 ALSA_LIBS ?= -lasound
 JACK_LIBS ?= -ljack
 
@@ -77,8 +76,7 @@ TESTS = tests/cues \
 	tests/observer \
 	tests/status \
 	tests/timecoder \
-	tests/track \
-	tests/ttf
+	tests/track
 
 # Optional device types
 
@@ -118,12 +116,9 @@ VERSION = $(shell ./mkversion)
 # Main binary
 
 xwax:		$(OBJS)
-xwax:		LDLIBS += $(SDL_LIBS) $(DEVICE_LIBS) -lm
+xwax:		LDLIBS += $(NCURSES_LIBS) $(DEVICE_LIBS) -lm
 xwax:		LDFLAGS += -pthread
 
-interface.o:	CFLAGS += $(SDL_CFLAGS)
-
-xwax.o:		CFLAGS += $(SDL_CFLAGS)
 xwax.o:		CPPFLAGS += $(DEVICE_CPPFLAGS)
 xwax.o:		CPPFLAGS += -DEXECDIR=\"$(EXECDIR)\" -DVERSION=\"$(VERSION)\"
 xwax.o:		.version
@@ -181,11 +176,6 @@ tests/timecoder:	tests/timecoder.o lut.o timecoder.o
 tests/track:	tests/track.o excrate.o external.o index.o library.o rig.o status.o thread.o track.o
 tests/track:	LDFLAGS += -pthread
 tests/track:	LDLIBS += -lm
-
-tests/ttf.o:	tests/ttf.c  # not needed except to workaround Make 3.81
-tests/ttf.o:	CFLAGS += $(SDL_CFLAGS)
-
-tests/ttf:	LDLIBS += $(SDL_LIBS)
 
 .PHONY:		clean
 clean:
