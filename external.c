@@ -35,6 +35,8 @@
 /*
  * Fork a child process, attaching stdout to the given pipe
  *
+ * If the program name does not contain a slash, search PATH for it.
+ *
  * Return: -1 on error, or pid on success
  * Post: on success, *fd is file handle for reading
  */
@@ -61,12 +63,12 @@ static pid_t do_fork(int pp[2], const char *path, char *argv[])
         if (close(pp[1]) != 0)
             abort();
 
-        if (execv(path, argv) == -1) {
+        if (execvp(path, argv) == -1) {
             perror(path);
             _exit(EXIT_FAILURE); /* vfork() was used */
         }
 
-        abort(); /* execv() does not return */
+        abort(); /* execvp() does not return */
     }
 
     if (close(pp[1]) != 0)
