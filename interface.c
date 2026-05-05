@@ -84,25 +84,7 @@ static const char *record_artist(const struct record *r)
     if (r->artist[0] != '\0')
         return r->artist;
 
-    return "(unknown artist)";
-}
-
-static void format_record_label(const struct record *r, char *buf, size_t len)
-{
-    assert(buf != NULL);
-    assert(len != 0);
-
-    if (r == NULL || r->pathname == NULL) {
-        snprintf(buf, len, "(no track loaded)");
-    } else if (r->artist[0] != '\0' && r->title[0] != '\0') {
-        snprintf(buf, len, "%s - %s", r->artist, r->title);
-    } else if (r->title[0] != '\0') {
-        snprintf(buf, len, "%s", r->title);
-    } else if (r->artist[0] != '\0') {
-        snprintf(buf, len, "%s", r->artist);
-    } else {
-        snprintf(buf, len, "%s", pathname_basename(r->pathname));
-    }
+    return "-";
 }
 
 static void format_duration(double seconds, char *buf, size_t len)
@@ -330,6 +312,8 @@ static void draw_screen(void)
 {
     enum {
         HEADER_VALUE_COL = 9,
+        LIST_PREFIX_COL = 3,
+        LIST_GAP = 2,
         RIGHT_MARGIN = 1
     };
 
@@ -337,9 +321,12 @@ static void draw_screen(void)
     struct deck *d;
     struct record *r;
     const char *message;
-    const char *title, *artist;
-    char label[512], timebuf[80];
-    int i, list_start, list_height, tx, title_width, artist_width, time_width;
+    const char *title, *artist, *list_title, *list_artist;
+    char timebuf[80];
+    int i, list_header_row, list_start, list_height, tx;
+    int title_width, artist_width, time_width;
+    int list_cols, list_title_width, list_artist_col, list_artist_width;
+    bool show_list_headers;
 
     getmaxyx(stdscr, rows, cols);
     erase();
@@ -392,28 +379,72 @@ static void draw_screen(void)
 
     /* Track list */
 
-    list_start = 3;
+    show_list_headers = rows >= 6;
+    if (show_list_headers) {
+        list_header_row = 3;
+        list_start = 4;
+    } else {
+        list_header_row = -1;
+        list_start = 3;
+    }
+
     list_height = rows - list_start - 1;
     if (list_height < 1)
         list_height = 1;
 
+    list_cols = cols - LIST_PREFIX_COL - RIGHT_MARGIN;
+    if (list_cols < 0)
+        list_cols = 0;
+
+    if (list_cols > LIST_GAP) {
+        list_title_width = (list_cols - LIST_GAP) * 2 / 3;
+        list_artist_width = list_cols - LIST_GAP - list_title_width;
+    } else {
+        list_title_width = list_cols;
+        list_artist_width = 0;
+    }
+
+    list_artist_col = LIST_PREFIX_COL + list_title_width + LIST_GAP;
+
     selector_set_lines(&selector, list_height);
 
+    if (show_list_headers) {
+        mvhline(list_header_row, 0, ' ', cols);
+        attron(A_BOLD);
+        mvaddnstr(list_header_row, LIST_PREFIX_COL, "Title", list_title_width);
+        if (list_artist_width > 0 && list_artist_col < cols)
+            mvaddnstr(list_header_row, list_artist_col, "Artist",
+                      list_artist_width);
+        attroff(A_BOLD);
+    }
+
     for (i = 0; i < list_height; i++) {
+        int row;
         int entry = listbox_map(&selector.records, i);
         if (entry == -1)
             break;
 
+        row = list_start + i;
         r = selector.view_index->record[entry];
-        format_record_label(r, label, sizeof label);
+        list_title = record_title(r);
+        list_artist = record_artist(r);
 
         if (entry == listbox_current(&selector.records)) {
             attron(A_REVERSE);
-            mvhline(list_start + i, 0, ' ', cols);
-            mvprintw(list_start + i, 0, " > %s", label);
+            mvhline(row, 0, ' ', cols);
+            mvaddstr(row, 0, " > ");
+            mvaddnstr(row, LIST_PREFIX_COL, list_title, list_title_width);
+            if (list_artist_width > 0 && list_artist_col < cols)
+                mvaddnstr(row, list_artist_col, list_artist,
+                          list_artist_width);
             attroff(A_REVERSE);
         } else {
-            mvprintw(list_start + i, 0, "   %s", label);
+            mvhline(row, 0, ' ', cols);
+            mvaddstr(row, 0, "   ");
+            mvaddnstr(row, LIST_PREFIX_COL, list_title, list_title_width);
+            if (list_artist_width > 0 && list_artist_col < cols)
+                mvaddnstr(row, list_artist_col, list_artist,
+                          list_artist_width);
         }
     }
 
