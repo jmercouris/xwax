@@ -21,10 +21,11 @@
  * SDL library browser for the first deck
  *
  * The window is a full-width track list: the loaded record at the
- * top, one row per track, a status line, then Load and Quit.
- * Keys match the old terminal browser. A finger tap loads the row
- * under it; a vertical drag scrolls. SDL reads the touchscreen
- * itself, including on the kmsdrm console driver.
+ * top, one row per track, and a status line.
+ * Keys match the old terminal browser. A finger tap selects the row
+ * under it, and a second tap loads that track. A vertical drag
+ * scrolls the list and leaves the highlight where it is. SDL reads the touchscreen itself, including on the
+ * kmsdrm console driver.
  */
 
 #include <assert.h>
@@ -54,7 +55,7 @@
 
 #define FONT "DejaVuSans.ttf"
 #define BOLD_FONT "DejaVuSans-Bold.ttf"
-#define FONT_SIZE 20
+#define FONT_SIZE 16
 
 #define DEFAULT_WIDTH 1280
 #define DEFAULT_HEIGHT 720
@@ -69,8 +70,6 @@
 
 #define HIT_NONE  0
 #define HIT_LIST  1
-#define HIT_LOAD  2
-#define HIT_QUIT  3
 
 struct hit {
     int where;
@@ -94,8 +93,6 @@ static const SDL_Color background_col = {0, 0, 0, 255},
     text_col = {224, 224, 224, 255},
     dim_col = {128, 128, 128, 255},
     selected_col = {0, 48, 64, 255},
-    action_col = {28, 28, 28, 255},
-    action_down_col = {0, 64, 80, 255},
     rule_col = {64, 64, 64, 255},
     warn_col = {192, 64, 0, 255};
 
@@ -124,8 +121,7 @@ static struct {
     int list_header_y;
     int list_y;
     int list_rows;
-    int status_y;
-    int action_y;
+    int status_y, status_h;
 } screen;
 
 /*
@@ -143,6 +139,10 @@ static struct {
     int row;
     bool dragged;
 } gesture;
+
+/* List entry chosen by the previous tap. A second tap on it loads. */
+
+static int tapped_entry = -1;
 
 /*
  * Scale a pixel count by the geometry zoom
@@ -589,8 +589,8 @@ static void end_stderr_capture(void)
 /*
  * Lay out rows from the current surface size
  *
- * List rows take whatever is left after the header, the status
- * line and the two action rows.
+ * List rows take whatever is left after the header and the status
+ * line.
  */
 
 static void measure(SDL_Surface *sf)
@@ -629,9 +629,12 @@ static void measure(SDL_Surface *sf)
     }
     screen.artist_x = screen.title_x + screen.title_w + screen.gap;
 
+    /* Shorter than a track row: just the font, plus a little padding */
+    screen.status_h = TTF_FontHeight(font) + zoom(6);
+
     /* track, artist, 2px rule, column headings */
     top = screen.row_h * 3 + 2;
-    bottom = screen.row_h * 3;
+    bottom = screen.status_h;
     list_h = screen.h - top - bottom;
     screen.list_rows = list_h / screen.row_h;
     if (screen.list_rows < 1)
@@ -639,10 +642,10 @@ static void measure(SDL_Surface *sf)
 
     screen.list_header_y = screen.row_h * 2 + 2;
     screen.list_y = screen.list_header_y + screen.row_h;
-    screen.status_y = screen.list_y + screen.list_rows * screen.row_h;
-    screen.action_y = screen.status_y + screen.row_h;
+    screen.status_y = screen.h - screen.status_h;
 
-    selector_set_lines(&selector, screen.list_rows);
+    if (selector.records.lines != screen.list_rows)
+        selector_set_lines(&selector, screen.list_rows);
 }
 
 static struct hit hit_test(float x, float y)
@@ -660,17 +663,6 @@ static struct hit hit_test(float x, float y)
         && iy < screen.list_y + screen.list_rows * screen.row_h) {
         hit.where = HIT_LIST;
         hit.row = (iy - screen.list_y) / screen.row_h;
-        return hit;
-    }
-
-    if (iy >= screen.action_y && iy < screen.action_y + screen.row_h) {
-        hit.where = HIT_LOAD;
-        return hit;
-    }
-
-    if (iy >= screen.action_y + screen.row_h
-        && iy < screen.action_y + 2 * screen.row_h) {
-        hit.where = HIT_QUIT;
         return hit;
     }
 
@@ -708,34 +700,6 @@ static void draw_field(SDL_Surface *sf, int y, const char *label,
 
     blit_text(sf, screen.margin + screen.label_w, ty, value_w,
               value, font, fg, header_col);
-}
-
-static void draw_button(SDL_Surface *sf, int y, const char *label,
-                        bool pressed)
-{
-    SDL_Color bg;
-    char utf8[32];
-    int tw = 0, th = 0, x;
-
-    bg = pressed ? action_down_col : action_col;
-    fill_rect(sf, 0, y, screen.w, screen.row_h, bg);
-
-    locale_to_utf8(label, utf8, sizeof utf8);
-    if (TTF_SizeUTF8(bold, utf8, &tw, &th) != 0)
-        return;
-
-    x = (screen.w - tw) / 2;
-    if (x < screen.margin)
-        x = screen.margin;
-
-    blit_text(sf, x, text_y(y, bold), tw, label, bold, text_col, bg);
-}
-
-static bool button_pressed(int where)
-{
-    return gesture.source != GESTURE_NONE
-        && !gesture.dragged
-        && gesture.where == where;
 }
 
 static void draw(SDL_Surface *sf)
@@ -806,24 +770,28 @@ static void draw(SDL_Surface *sf)
         }
     }
 
-    fill_rect(sf, 0, screen.status_y, screen.w, screen.row_h, background_col);
+    fill_rect(sf, 0, screen.status_y, screen.w, screen.status_h, background_col);
     message = status();
     status_fg = dim_col;
     if (message[0] == '\0') {
-        message = "Swipe to scroll. Tap a track to load.";
+        message = "Tap a track to select it. Tap again to load.";
     } else if (status_level() >= STATUS_WARN) {
         status_fg = warn_col;
     } else if (status_level() >= STATUS_INFO) {
         status_fg = text_col;
     }
 
-    blit_text(sf, screen.margin, text_y(screen.status_y, font),
-              screen.w - screen.margin * 2, message, font,
-              status_fg, background_col);
+    {
+        int dy;
 
-    draw_button(sf, screen.action_y, "Load", button_pressed(HIT_LOAD));
-    draw_button(sf, screen.action_y + screen.row_h, "Quit",
-                button_pressed(HIT_QUIT));
+        dy = (screen.status_h - TTF_FontHeight(font)) / 2;
+        if (dy < 0)
+            dy = 0;
+
+        blit_text(sf, screen.margin, screen.status_y + dy,
+                  screen.w - screen.margin * 2, message, font,
+                  status_fg, background_col);
+    }
 
     if (SDL_MUSTLOCK(sf))
         SDL_UnlockSurface(sf);
@@ -842,12 +810,12 @@ static void load_current(void)
 }
 
 /*
- * Select the on-screen row and load it
+ * First tap selects the row. A second tap on that same entry loads it.
  *
  * The row is already visible, so the list offset stays put.
  */
 
-static void load_row(int row)
+static void tap_row(int row)
 {
     int entry;
 
@@ -856,7 +824,35 @@ static void load_row(int row)
         return;
 
     selector.records.selected = entry;
-    load_current();
+
+    if (entry == tapped_entry) {
+        load_current();
+        return;
+    }
+
+    tapped_entry = entry;
+}
+
+/*
+ * Move the visible window by n rows. The highlight stays put.
+ * Positive n reveals later tracks.
+ */
+
+static void scroll_list(int n)
+{
+    struct listbox *lb;
+    int max_offset;
+
+    lb = &selector.records;
+    max_offset = lb->entries - lb->lines;
+    if (max_offset < 0)
+        max_offset = 0;
+
+    lb->offset += n;
+    if (lb->offset < 0)
+        lb->offset = 0;
+    if (lb->offset > max_offset)
+        lb->offset = max_offset;
 }
 
 static void scroll_by_pixels(float dy)
@@ -866,16 +862,19 @@ static void scroll_by_pixels(float dy)
 
     gesture.carry += dy;
 
+    /* Finger down follows the content toward earlier tracks */
     while (gesture.carry >= screen.row_h) {
-        selector_up(&selector);
+        scroll_list(-1);
         gesture.carry -= screen.row_h;
         gesture.dragged = true;
+        tapped_entry = -1;
     }
 
     while (gesture.carry <= -screen.row_h) {
-        selector_down(&selector);
+        scroll_list(1);
         gesture.carry += screen.row_h;
         gesture.dragged = true;
+        tapped_entry = -1;
     }
 }
 
@@ -902,52 +901,24 @@ static void gesture_move(float x, float y)
 {
     float dy;
 
+    (void)x;
+
     dy = y - gesture.last_y;
     gesture.last_y = y;
 
-    if (gesture.where == HIT_LIST) {
+    if (gesture.where == HIT_LIST)
         scroll_by_pixels(dy);
-        return;
-    }
-
-    /* A slide off a button is not a tap */
-    if (fabsf(x - gesture.x) >= screen.row_h / 2.0f
-        || fabsf(y - gesture.y) >= screen.row_h / 2.0f)
-        gesture.dragged = true;
 }
 
-/*
- * Return: false if the interface should exit
- */
-
-static bool gesture_end(void)
+static void gesture_end(void)
 {
-    bool live;
-
-    live = true;
-
     if (gesture.source == GESTURE_NONE)
-        return true;
+        return;
 
-    if (!gesture.dragged) {
-        switch (gesture.where) {
-        case HIT_LIST:
-            load_row(gesture.row);
-            break;
-        case HIT_LOAD:
-            load_current();
-            break;
-        case HIT_QUIT:
-            rig_quit();
-            live = false;
-            break;
-        default:
-            break;
-        }
-    }
+    if (!gesture.dragged && gesture.where == HIT_LIST)
+        tap_row(gesture.row);
 
     gesture.source = GESTURE_NONE;
-    return live;
 }
 
 /*
@@ -959,18 +930,22 @@ static bool handle_key(SDL_Keycode key)
     switch (key) {
     case SDLK_UP:
         selector_up(&selector);
+        tapped_entry = -1;
         break;
 
     case SDLK_DOWN:
         selector_down(&selector);
+        tapped_entry = -1;
         break;
 
     case SDLK_PAGEUP:
         selector_page_up(&selector);
+        tapped_entry = -1;
         break;
 
     case SDLK_PAGEDOWN:
         selector_page_down(&selector);
+        tapped_entry = -1;
         break;
 
     case SDLK_RIGHT:
@@ -1076,9 +1051,10 @@ static bool handle_event(SDL_Event *event, SDL_Surface **surface)
 
     case SDL_MOUSEWHEEL:
         if (event->wheel.y > 0)
-            selector_up(&selector);
+            scroll_list(-1);
         else if (event->wheel.y < 0)
-            selector_down(&selector);
+            scroll_list(1);
+        tapped_entry = -1;
         break;
 
     case SDL_MOUSEBUTTONDOWN:
@@ -1102,10 +1078,8 @@ static bool handle_event(SDL_Event *event, SDL_Surface **surface)
 
     case SDL_MOUSEBUTTONUP:
         if (gesture.source == GESTURE_MOUSE
-            && event->button.button == SDL_BUTTON_LEFT) {
-            if (!gesture_end())
-                return false;
-        }
+            && event->button.button == SDL_BUTTON_LEFT)
+            gesture_end();
         break;
 
     case SDL_FINGERDOWN: {
@@ -1130,10 +1104,8 @@ static bool handle_event(SDL_Event *event, SDL_Surface **surface)
 
     case SDL_FINGERUP:
         if (gesture.source == GESTURE_FINGER
-            && gesture.finger == event->tfinger.fingerId) {
-            if (!gesture_end())
-                return false;
-        }
+            && gesture.finger == event->tfinger.fingerId)
+            gesture_end();
         break;
 
     default:
