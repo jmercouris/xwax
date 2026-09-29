@@ -59,14 +59,18 @@ This reverses the effect of the
 .B \-\-phono
 option, and is the default.
 .TP
-.B \-\-import \fIpath\fR
-Execute the given program to load tracks for playing. The program
-outputs a stream of signed, little-endian, 16-bit, 2 channel audio on
-standard output.
+.B \-\-import \fIprogram\fR
+Execute the given program to load tracks for playing. If the program
+name does not contain a slash, it is searched for in
+.BR PATH .
+The program outputs a stream of signed, little-endian, 16-bit,
+2 channel audio on standard output.
 .TP
-.B \-\-scan \fIpath\fR
-Execute the given program to scan music libraries. Applies to
-subsequent use of the
+.B \-\-scan \fIprogram\fR
+Execute the given program to scan music libraries. If the program
+name does not contain a slash, it is searched for in
+.BR PATH .
+Applies to subsequent use of the
 .B \-\-crate
 flag.
 .TP

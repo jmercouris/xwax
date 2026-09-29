@@ -34,7 +34,6 @@ JACK_LIBS ?= -ljack
 PREFIX ?= $(HOME)
 
 BINDIR ?= $(PREFIX)/bin
-EXECDIR ?= $(PREFIX)/libexec
 MANDIR ?= $(PREFIX)/share/man
 DOCDIR ?= $(PREFIX)/share/doc
 
@@ -125,7 +124,7 @@ interface.o:	CFLAGS += $(SDL_CFLAGS)
 
 xwax.o:		CFLAGS += $(SDL_CFLAGS)
 xwax.o:		CPPFLAGS += $(DEVICE_CPPFLAGS)
-xwax.o:		CPPFLAGS += -DEXECDIR=\"$(EXECDIR)\" -DVERSION=\"$(VERSION)\"
+xwax.o:		CPPFLAGS += -DVERSION=\"$(VERSION)\"
 xwax.o:		.version
 
 # Supporting programs
@@ -138,8 +137,8 @@ mktimecode:	LDLIBS  += -lm
 .PHONY:		install
 install:
 		$(INSTALL) -D xwax $(DESTDIR)$(BINDIR)/xwax
-		$(INSTALL) -D scan $(DESTDIR)$(EXECDIR)/xwax-scan
-		$(INSTALL) -D import $(DESTDIR)$(EXECDIR)/xwax-import
+		$(INSTALL) -D scan $(DESTDIR)$(BINDIR)/xwax-scan
+		$(INSTALL) -D import $(DESTDIR)$(BINDIR)/xwax-import
 		$(INSTALL) -D -m 0644 xwax.1 $(DESTDIR)$(MANDIR)/man1/xwax.1
 		$(INSTALL) -D -m 0644 CHANGES $(DESTDIR)$(DOCDIR)/xwax/CHANGES
 		$(INSTALL) -D -m 0644 COPYING $(DESTDIR)$(DOCDIR)/xwax/COPYING

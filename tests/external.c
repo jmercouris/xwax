@@ -34,7 +34,7 @@ int main(int argc, char *argv[])
     struct pollfd pe;
     struct rb rb;
 
-    pid = fork_pipe_nb(&fd, "/usr/bin/find", "find", NULL);
+    pid = fork_pipe_nb(&fd, "find", "find", NULL);
     if (pid == -1)
         return -1;
 
