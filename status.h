@@ -24,6 +24,7 @@
 #ifndef STATUS_H
 #define STATUS_H
 
+#include <stdbool.h>
 #include <stdarg.h>
 
 #include "observer.h"
@@ -40,5 +41,6 @@ int status_level(void);
 
 void status_set(int level, const char *s);
 void status_printf(int level, const char *s, ...);
+void status_set_output(bool enabled);
 
 #endif

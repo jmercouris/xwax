@@ -25,6 +25,7 @@ struct event status_changed = EVENT_INIT(status_changed);
 
 static const char *message = "";
 static int level = 0;
+static bool output = true;
 
 /*
  * Return: current status string
@@ -40,6 +41,11 @@ int status_level(void)
     return level;
 }
 
+void status_set_output(bool enabled)
+{
+    output = enabled;
+}
+
 /*
  * Set status to reference a static string
  *
@@ -51,7 +57,7 @@ void status_set(int l, const char *s)
     message = s;
     level = l;
 
-    if (l >= STATUS_INFO) {
+    if (output && l >= STATUS_INFO) {
         fputs(s, stderr);
         fputc('\n', stderr);
     }
